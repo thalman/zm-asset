@@ -1,0 +1,31 @@
+<project
+    name = "zm-asset"
+    description = "Asset management component"
+    script = "zproject.gsl"
+    email = "N/A"
+    repository = "https://github.com/zmonit/zm-asset"
+    header = "zmasset.h"
+    >
+
+    <target name = "travis" />
+    <target name = "redhat" />
+
+    <include filename = "license.xml" />
+    <version major = "1" minor = "0" patch = "0" />
+    <abi current = "1" revision = "0" age = "0" />
+
+    <use project = "czmq" />
+    <use project = "malamute" />
+
+    <use project = "zm-proto" libname = "libzm_proto" header="zmproto.h"
+        repository = "https://github.com/zmonit/zm-proto"
+        test = "zm_proto_test">
+        <use project = "libzmq"/>
+        <use project = "czmq"/>
+        <use project = "malamute"/>
+    </use>
+
+    <actor name = "zm asset">zm asset actor</actor>
+    <main name = "zmasset" service = "1">Main daemon</main>
+
+</project>
