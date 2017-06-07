@@ -28,6 +28,8 @@ struct _zm_asset_t {
     bool verbose;               //  Verbose logging enabled?
     //  TODO: Declare properties
     zconfig_t *config;          //  Server configuration
+    mlm_client_t *client;       //  Malamute client
+    zhash_t *consumers;            // list of streams to subscribe
 };
 
 
@@ -45,7 +47,10 @@ zm_asset_new (zsock_t *pipe, void *args)
     self->poller = zpoller_new (self->pipe, NULL);
 
     //  TODO: Initialize properties
-    self->config = zconfig_new ("root", NULL);
+    self->config = NULL;
+    self->consumers = NULL;
+    self->client = mlm_client_new ();
+    assert (self->client);
 
     return self;
 }
@@ -63,6 +68,8 @@ zm_asset_destroy (zm_asset_t **self_p)
 
         //  TODO: Free actor properties
         zconfig_destroy (&self->config);
+        zhash_destroy (&self->consumers);
+        mlm_client_destroy (&self->client);
 
         //  Free object itself
         zpoller_destroy (&self->poller);
@@ -71,6 +78,103 @@ zm_asset_destroy (zm_asset_t **self_p)
     }
 }
 
+static const char*
+zm_asset_cfg_endpoint (zm_asset_t *self)
+{
+    assert (self);
+    if (self->config) {
+        return zconfig_resolve (self->config, "malamute/endpoint", NULL);
+    }
+    return NULL;
+}
+
+static const char*
+zm_asset_cfg_name (zm_asset_t *self)
+{
+    assert (self);
+    if (self->config) {
+        return zconfig_resolve (self->config, "server/name", NULL);
+    }
+    return NULL;
+}
+
+static const char *
+zm_asset_cfg_producer (zm_asset_t *self) {
+    assert (self);
+    if (self->config) {
+        return zconfig_resolve (self->config, "malamute/producer", NULL);
+    }
+    return NULL;
+}
+
+static const char*
+zm_asset_cfg_consumer_first (zm_asset_t *self) {
+    assert (self);
+    zhash_destroy (&self->consumers);
+    self->consumers = zhash_new ();
+    
+    zconfig_t *cfg = zconfig_locate (self->config, "malamute/consumer");
+    if (cfg) {
+        zconfig_t *child = zconfig_child (cfg);
+        while (child) {
+            zhash_insert (self->consumers, zconfig_name (child), zconfig_value (child));
+            child = zconfig_next (child);
+        }
+    }
+
+    return (const char*) zhash_first (self->consumers);
+}
+
+static const char*
+zm_asset_cfg_consumer_next (zm_asset_t *self) {
+    assert (self);
+    assert (self->consumers);
+     return (const char*) zhash_next (self->consumers);
+}
+
+static const char*
+zm_asset_cfg_consumer_stream (zm_asset_t *self) {
+    assert (self);
+    assert (self->consumers);
+     return zhash_cursor (self->consumers);
+}
+
+static int
+zm_asset_connect_to_malamute (zm_asset_t *self)
+{
+    if (!self->config) {
+        zsys_warning ("zm-asset: no CONFIGuration provided, there is nothing to do");
+        return -1;
+    }
+
+    const char *endpoint = zm_asset_cfg_endpoint (self);
+    const char *name = zm_asset_cfg_name (self);
+    int r = mlm_client_connect (self->client, endpoint, 5000, name);
+    if (r == -1) {
+        zsys_warning ("Can't connect to malamute endpoint %", endpoint);
+        return -1;
+    }
+
+    if (zm_asset_cfg_producer (self)) {
+        r = mlm_client_set_producer (self->client, zm_asset_cfg_producer (self));
+        if (r == -1) {
+            zsys_warning ("Can't setup publisher on stream %", zm_asset_cfg_producer (self));
+            return -1;
+        }
+    }
+
+    const char *pattern = zm_asset_cfg_consumer_first (self);
+    while (pattern) {
+        const char *stream = zm_asset_cfg_consumer_stream (self);
+        r = mlm_client_set_consumer (self->client, stream, pattern);
+        if (r == -1) {
+            zsys_warning ("Can't setup consumer %s/%s", stream, pattern);
+            return -1;
+        }
+        pattern = zm_asset_cfg_consumer_next (self);
+    }
+    return 0;
+}
 
 //  Start this actor. Return a value greater or equal to zero if initialization
 //  was successful. Otherwise -1.
@@ -80,7 +184,9 @@ zm_asset_start (zm_asset_t *self)
 {
     assert (self);
 
-    //  TODO: Add startup actions
+    int r = zm_asset_connect_to_malamute (self);
+    if (r == -1)
+        return r;
 
     return 0;
 }
@@ -95,6 +201,7 @@ zm_asset_stop (zm_asset_t *self)
     assert (self);
 
     //  TODO: Add shutdown actions
+    mlm_client_destroy (&self->client);
 
     return 0;
 }
@@ -108,7 +215,7 @@ zm_asset_config (zm_asset_t *self, zmsg_t *request)
 
     char *str_config = zmsg_popstr (request);
     if (str_config) {
-        zconfig_t *foo = zconfig_load (str_config);
+        zconfig_t *foo = zconfig_str_load (str_config);
         if (foo) {
             zconfig_destroy (&self->config);
             self->config = foo;
@@ -190,21 +297,7 @@ zm_asset_test (bool verbose)
     printf (" * zm_asset: ");
     //  @selftest
     //  Simple create/destroy test
-    // Note: If your selftest reads SCMed fixture data, please keep it in
-    // src/selftest-ro; if your test creates filesystem objects, please
-    // do so under src/selftest-rw. They are defined below along with a
-    // usecase for the variables (assert) to make compilers happy.
-    const char *SELFTEST_DIR_RO = "src/selftest-ro";
-    const char *SELFTEST_DIR_RW = "src/selftest-rw";
-    assert (SELFTEST_DIR_RO);
-    assert (SELFTEST_DIR_RW);
-    // Uncomment these to use C++ strings in C++ selftest code:
-    //std::string str_SELFTEST_DIR_RO = std::string(SELFTEST_DIR_RO);
-    //std::string str_SELFTEST_DIR_RW = std::string(SELFTEST_DIR_RW);
-    //assert ( (str_SELFTEST_DIR_RO != "") );
-    //assert ( (str_SELFTEST_DIR_RW != "") );
-    // NOTE that for "char*" context you need (str_SELFTEST_DIR_RO + "/myfilename").c_str()
-
+    // actor test
     zactor_t *zm_asset = zactor_new (zm_asset_actor, NULL);
 
     zactor_destroy (&zm_asset);
