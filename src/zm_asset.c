@@ -51,6 +51,7 @@ zm_asset_new (zsock_t *pipe, void *args)
     self->consumers = NULL;
     self->client = mlm_client_new ();
     assert (self->client);
+    zpoller_add (self->poller, mlm_client_msgpipe (self->client));
 
     return self;
 }
@@ -69,6 +70,7 @@ zm_asset_destroy (zm_asset_t **self_p)
         //  TODO: Free actor properties
         zconfig_destroy (&self->config);
         zhash_destroy (&self->consumers);
+        zpoller_remove (self->poller, self->client);
         mlm_client_destroy (&self->client);
 
         //  Free object itself
@@ -149,6 +151,12 @@ zm_asset_connect_to_malamute (zm_asset_t *self)
 
     const char *endpoint = zm_asset_cfg_endpoint (self);
     const char *name = zm_asset_cfg_name (self);
+
+    if (!self->client) {
+        self->client = mlm_client_new ();
+        zpoller_add (self->poller, mlm_client_msgpipe (self->client));
+    }
+
     int r = mlm_client_connect (self->client, endpoint, 5000, name);
     if (r == -1) {
         zsys_warning ("Can't connect to malamute endpoint %", endpoint);
@@ -201,6 +209,7 @@ zm_asset_stop (zm_asset_t *self)
     assert (self);
 
     //  TODO: Add shutdown actions
+    zpoller_remove (self->poller, self->client);
     mlm_client_destroy (&self->client);
 
     return 0;
@@ -281,6 +290,7 @@ zm_asset_actor (zsock_t *pipe, void *args)
 
     while (!self->terminated) {
         zsock_t *which = (zsock_t *) zpoller_wait (self->poller, 0);
+
         if (which == self->pipe)
             zm_asset_recv_api (self);
        //  Add other sockets when you need them.
