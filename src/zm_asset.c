@@ -30,6 +30,7 @@ struct _zm_asset_t {
     zconfig_t *config;          //  Server configuration
     mlm_client_t *client;       //  Malamute client
     zhash_t *consumers;            // list of streams to subscribe
+    zm_proto_t *msg;            //  Last received message
 };
 
 
@@ -49,6 +50,7 @@ zm_asset_new (zsock_t *pipe, void *args)
     //  TODO: Initialize properties
     self->config = NULL;
     self->consumers = NULL;
+    self->msg = NULL;
     self->client = mlm_client_new ();
     assert (self->client);
     zpoller_add (self->poller, mlm_client_msgpipe (self->client));
@@ -70,6 +72,7 @@ zm_asset_destroy (zm_asset_t **self_p)
         //  TODO: Free actor properties
         zconfig_destroy (&self->config);
         zhash_destroy (&self->consumers);
+        zm_proto_destroy (&self->msg);
         zpoller_remove (self->poller, self->client);
         mlm_client_destroy (&self->client);
 
@@ -274,6 +277,49 @@ zm_asset_recv_api (zm_asset_t *self)
     zmsg_destroy (&request);
 }
 
+static void
+zm_asset_recv_mlm_mailbox (zm_asset_t *self)
+{
+    assert (self);
+    zm_proto_print (self->msg);
+}
+
+static void
+zm_asset_recv_mlm_stream (zm_asset_t *self)
+{
+    assert (self);
+    zm_proto_print (self->msg);
+
+    if (zm_proto_id (self->msg) != ZM_PROTO_DEVICE) {
+        if (self->verbose)
+            zsys_warning ("message from sender=%s, with subject=%s os not DEVICE",
+            mlm_client_sender (self->client),
+            mlm_client_subject (self->client));
+        return;
+    }
+}
+
+static void
+zm_asset_recv_mlm (zm_asset_t *self)
+{
+    assert (self);
+    zmsg_t *request = mlm_client_recv (self->client);
+    int r = zm_proto_recv (self->msg, request);
+    zmsg_destroy (&request);
+    if (r != 0) {
+        if (self->verbose)
+            zsys_warning ("can't read message from sender=%s, with subject=%s",
+            mlm_client_sender (self->client),
+            mlm_client_subject (self->client));
+        return;
+    }
+
+    if (streq (mlm_client_command (self->client), "MAILBOX DELIVER"))
+        zm_asset_recv_mlm_mailbox (self);
+    else
+    if (streq (mlm_client_command (self->client), "STREAM DELIVER"))
+        zm_asset_recv_mlm_stream (self);
+}
 
 //  --------------------------------------------------------------------------
 //  This is the actor which runs in its own thread.
@@ -293,6 +339,9 @@ zm_asset_actor (zsock_t *pipe, void *args)
 
         if (which == self->pipe)
             zm_asset_recv_api (self);
+        else
+        if (which == mlm_client_msgpipe (self->client))
+            zm_asset_recv_mlm (self);
        //  Add other sockets when you need them.
     }
     zm_asset_destroy (&self);
