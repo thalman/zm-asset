@@ -28,6 +28,8 @@
 void
 zm_asset_private_selftest (bool verbose)
 {
+// Tests for stable private classes:
+    zm_devices_test (verbose);
 }
 /*
 ################################################################################

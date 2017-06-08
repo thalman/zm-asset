@@ -26,6 +26,7 @@
     </use>
 
     <actor name = "zm asset">zm asset actor</actor>
+    <class name = "zm devices" private="1">Devices API</class>
     <main name = "zmasset" service = "1">Main daemon</main>
 
 </project>
