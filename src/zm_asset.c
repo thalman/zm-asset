@@ -315,38 +315,43 @@ zm_asset_recv_mlm_mailbox (zm_asset_t *self)
     assert (self);
 
     const char *subject = mlm_client_subject (self->client);
+    zmsg_t *msg = zmsg_new ();
     if (streq (subject, "INSERT")) {
         zm_devices_insert (self->devices, self->msg);
-        // TODO: there should be a reply, extend zm_proto with OK/ERROR messages?
+        zm_proto_encode_ok (self->msg);
+        zm_proto_send (self->msg, msg);
     }
     else
     if (streq (subject, "DELETE")) {
         const char *device = zm_proto_device (self->msg);
         zm_devices_delete (self->devices, device);
-        // TODO: there should be a reply, extend zm_proto with OK/ERROR messages?
         // TODO: it should be announced on ASSET stream
+        zm_proto_encode_ok (self->msg);
+        zm_proto_send (self->msg, msg);
     }
     else
     if (streq (subject, "LOOKUP")) {
         const char *device = zm_proto_device (self->msg);
         zm_proto_t *reply = zm_devices_lookup (self->devices, device);
 
-        zmsg_t *msg = zmsg_new ();
         if (reply)
             zm_proto_send (reply, msg);
         else {
             zm_proto_encode_error (self->msg, 404, "Requested device does not exists");
             zm_proto_send (self->msg, msg);
         }
-        mlm_client_sendto (
-            self->client,
-            mlm_client_sender (self->client),
-            "LOOKUP",
-            NULL,
-            5000,
-            &msg);
     }
-
+    else {
+        zm_proto_encode_error (self->msg, 403, "Subject not found");
+        zm_proto_send (self->msg, msg);
+    }
+    mlm_client_sendto (
+        self->client,
+        mlm_client_sender (self->client),
+        "LOOKUP",
+        NULL,
+        5000,
+        &msg);
 }
 
 static void
@@ -453,19 +458,24 @@ zm_asset_test (bool verbose)
     mlm_client_set_producer (writer, ZM_PROTO_DEVICE_STREAM);
 
     zmsg_t *request = zm_proto_encode_device_v1 ("device1", zclock_mono (), 1024, NULL);
+    zmsg_t *zreply;
+    zm_proto_t *reply = zm_proto_new ();
+
     mlm_client_sendto (writer, "it.zmon.asset", "INSERT", NULL, 1000, &request);
-    // TODO: recv OK
+    zreply = mlm_client_recv (writer);
+    zm_proto_recv (reply, zreply);
+    zmsg_destroy (&zreply);
+
     request = zm_proto_encode_device_v1 ("device1", 0, 0, NULL);
     mlm_client_sendto (writer, "it.zmon.asset", "LOOKUP", NULL, 1000, &request);
-    zmsg_t *reply = mlm_client_recv (writer);
-    zm_proto_t *device = zm_proto_new ();
-    zm_proto_recv (device, reply);
-    zmsg_destroy (&reply);
+    zreply = mlm_client_recv (writer);
+    zm_proto_recv (reply, zreply);
+    zmsg_destroy (&zreply);
 
-    assert (zm_proto_id (device) == ZM_PROTO_DEVICE);
-    assert (streq (zm_proto_device (device), "device1"));
+    assert (zm_proto_id (reply) == ZM_PROTO_DEVICE);
+    assert (streq (zm_proto_device (reply), "device1"));
 
-    zm_proto_destroy (&device);
+    zm_proto_destroy (&reply);
     
     mlm_client_destroy (&writer);
     mlm_client_destroy (&reader);
