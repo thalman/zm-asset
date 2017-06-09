@@ -75,13 +75,13 @@ zm_asset_destroy (zm_asset_t **self_p)
         zconfig_destroy (&self->config);
         zhash_destroy (&self->consumers);
         zm_proto_destroy (&self->msg);
-        zpoller_remove (self->poller, self->client);
         mlm_client_destroy (&self->client);
+        zpoller_destroy (&self->poller);
+
         zm_devices_store (self->devices);
         zm_devices_destroy (&self->devices);
 
         //  Free object itself
-        zpoller_destroy (&self->poller);
         free (self);
         *self_p = NULL;
     }
