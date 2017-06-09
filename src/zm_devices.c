@@ -161,6 +161,10 @@ zm_devices_test (bool verbose)
 
     //  @selftest
     //  Simple create/destroy test
+    int r = zsys_dir_create (".test", NULL);
+    assert (r == 0);
+    zdir_t *dir = zdir_new (".test", NULL);
+    assert (dir);
 
     zm_devices_t *self = zm_devices_new (NULL);
     assert (self);
@@ -195,11 +199,11 @@ zm_devices_test (bool verbose)
     assert (zm_devices_lookup (self, "device2"));
     assert (zm_devices_lookup (self, "device3"));
 
-    zm_devices_set_file (self, ".devices.zpl");
-    int r = zm_devices_store (self);
+    zm_devices_set_file (self, ".test/devices.zpl");
+    r = zm_devices_store (self);
     assert (r == 0);
 
-    zm_devices_t *devices2 = zm_devices_new (".devices.zpl");
+    zm_devices_t *devices2 = zm_devices_new (".test/devices.zpl");
     assert (devices2);
     assert (streq (zm_devices_file (self), zm_devices_file (devices2)));
 
@@ -213,6 +217,10 @@ zm_devices_test (bool verbose)
 
     zm_devices_destroy (&self);
     zm_devices_destroy (&devices2);
+
+    zdir_remove (dir, true);
+    zdir_destroy (&dir);
+
     //  @end
     printf ("OK\n");
 }
