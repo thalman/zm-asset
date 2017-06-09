@@ -14,6 +14,29 @@
 @header
     zm_asset - zm asset actor
 @discuss
+
+zm-asset have three main mode of operation
+
+# PUBLISH on ZM_PROTO_DEVICE_STREAM (not yet implemented)
+
+In this mode actor simple publish information about devices with subjects
+INSERT and DELETE. INSERT means that new device has been added. DELETE means
+device is gone.
+
+# CONSUME (not implemented - what will be the use-case? inventory stream can be done via special MAILBOX command)
+
+# MAILBOX
+
+In this mode actor provide three commands (subjects)
+
+    * INSERT - adds or update device in internal cache, PUBLISH it on STREAM
+        returns ZM_PROTO_OK
+    * DELETE - delete device from cache and PUBLISH it on stream
+        returns ZM_PROTO_OK
+    * LOOKUP - search by device name
+        returns ZM_PROTO_DEVICE if found
+        returns ZM_PROTO_ERROR if not found
+
 @end
 */
 
