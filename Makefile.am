@@ -45,6 +45,7 @@ EXTRA_DIST += \
 endif
 
 EXTRA_DIST += \
+    src/zm_devices.h \
     src/zm_asset_classes.h
 
 # NOTE: this "include" syntax is not a "make" but an "autotools" keyword,

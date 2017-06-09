@@ -29,8 +29,9 @@ struct _zm_asset_t {
     //  TODO: Declare properties
     zconfig_t *config;          //  Server configuration
     mlm_client_t *client;       //  Malamute client
-    zhash_t *consumers;            // list of streams to subscribe
+    zhash_t *consumers;         //  List of streams to subscribe
     zm_proto_t *msg;            //  Last received message
+    zm_devices_t *devices;      //  List of devices to maintain
 };
 
 
@@ -46,6 +47,7 @@ zm_asset_new (zsock_t *pipe, void *args)
     self->pipe = pipe;
     self->terminated = false;
     self->poller = zpoller_new (self->pipe, NULL);
+    self->devices = zm_devices_new (NULL);
 
     //  TODO: Initialize properties
     self->config = NULL;
@@ -75,6 +77,8 @@ zm_asset_destroy (zm_asset_t **self_p)
         zm_proto_destroy (&self->msg);
         zpoller_remove (self->poller, self->client);
         mlm_client_destroy (&self->client);
+        zm_devices_store (self->devices);
+        zm_devices_destroy (&self->devices);
 
         //  Free object itself
         zpoller_destroy (&self->poller);
@@ -108,6 +112,15 @@ zm_asset_cfg_producer (zm_asset_t *self) {
     assert (self);
     if (self->config) {
         return zconfig_resolve (self->config, "malamute/producer", NULL);
+    }
+    return NULL;
+}
+
+static const char *
+zm_asset_cfg_file (zm_asset_t *self) {
+    assert (self);
+    if (self->config) {
+        return zconfig_resolve (self->config, "server/file", NULL);
     }
     return NULL;
 }
@@ -214,6 +227,7 @@ zm_asset_stop (zm_asset_t *self)
     //  TODO: Add shutdown actions
     zpoller_remove (self->poller, self->client);
     mlm_client_destroy (&self->client);
+    zm_devices_store (self->devices);
 
     return 0;
 }
@@ -231,6 +245,13 @@ zm_asset_config (zm_asset_t *self, zmsg_t *request)
         if (foo) {
             zconfig_destroy (&self->config);
             self->config = foo;
+            if (zm_asset_cfg_file (self)) {
+                if (!zm_devices_file (self->devices))
+                    zm_devices_set_file (self->devices, zm_asset_cfg_file (self));
+                zm_devices_store (self->devices);
+                zm_devices_destroy (&self->devices);
+                self->devices = zm_devices_new (zm_asset_cfg_file (self));
+            }
         }
         else {
             zsys_warning ("zm_asset: can't load config file from string");
@@ -282,6 +303,39 @@ zm_asset_recv_mlm_mailbox (zm_asset_t *self)
 {
     assert (self);
     zm_proto_print (self->msg);
+
+    const char *subject = mlm_client_subject (self->client);
+    if (streq (subject, "INSERT")) {
+        zm_devices_insert (self->devices, self->msg);
+        // TODO: there should be a reply, extend zm_proto with OK/ERROR messages?
+    }
+    else
+    if (streq (subject, "DELETE")) {
+        const char *device = zm_proto_device (self->msg);
+        zm_devices_delete (self->devices, device);
+        // TODO: there should be a reply, extend zm_proto with OK/ERROR messages?
+        // TODO: it should be announced on ASSET stream
+    }
+    else
+    if (streq (subject, "LOOKUP")) {
+        const char *device = zm_proto_device (self->msg);
+        zm_proto_t *reply = zm_devices_lookup (self->devices, device);
+        if (reply) {
+            zmsg_t *zreply = zmsg_new ();
+            zm_proto_send (reply, zreply);
+            mlm_client_sendto (
+                self->client,
+                mlm_client_sender (self->client),
+                "LOOKUP",
+                NULL,
+                5000,
+                &zreply);
+        }
+        else {
+            zsys_warning ("Can't send error reply now");
+        }
+    }
+
 }
 
 static void

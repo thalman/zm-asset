@@ -26,11 +26,21 @@
 //  Extra headers
 
 //  Opaque class structures to allow forward references
+#ifndef ZM_DEVICES_T_DEFINED
+typedef struct _zm_devices_t zm_devices_t;
+#define ZM_DEVICES_T_DEFINED
+#endif
 
 //  Internal API
+#include "zm_devices.h"
 
 //  *** To avoid double-definitions, only define if building without draft ***
 #ifndef ZM_ASSET_BUILD_DRAFT_API
+
+//  *** Draft method, defined for internal use only ***
+//  Self test of this class.
+ZM_ASSET_PRIVATE void
+    zm_devices_test (bool verbose);
 
 //  Self test for private classes
 ZM_ASSET_PRIVATE void
