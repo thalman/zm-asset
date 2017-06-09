@@ -29,8 +29,9 @@ struct _zm_asset_t {
     //  TODO: Declare properties
     zconfig_t *config;          //  Server configuration
     mlm_client_t *client;       //  Malamute client
-    zhash_t *consumers;            // list of streams to subscribe
+    zhash_t *consumers;         //  List of streams to subscribe
     zm_proto_t *msg;            //  Last received message
+    zm_devices_t *devices;      //  List of devices to maintain
 };
 
 
@@ -282,6 +283,39 @@ zm_asset_recv_mlm_mailbox (zm_asset_t *self)
 {
     assert (self);
     zm_proto_print (self->msg);
+
+    const char *subject = mlm_client_subject (self->client);
+    if (streq (subject, "INSERT")) {
+        zm_devices_insert (self->devices, self->msg);
+        // TODO: there should be a reply, extend zm_proto with OK/ERROR messages?
+    }
+    else
+    if (streq (subject, "DELETE")) {
+        const char *device = zm_proto_device (self->msg);
+        zm_devices_delete (self->devices, device);
+        // TODO: there should be a reply, extend zm_proto with OK/ERROR messages?
+        // TODO: it should be announced on ASSET stream
+    }
+    else
+    if (streq (subject, "LOOKUP")) {
+        const char *device = zm_proto_device (self->msg);
+        zm_proto_t *reply = zm_devices_lookup (self->devices, device);
+        if (reply) {
+            zmsg_t *zreply = zmsg_new ();
+            zm_proto_send (reply, zreply);
+            mlm_client_sendto (
+                self->client,
+                mlm_client_sender (self->client),
+                "LOOKUP",
+                NULL,
+                5000,
+                &zreply);
+        }
+        else {
+            zsys_warning ("Can't send error reply now");
+        }
+    }
+
 }
 
 static void

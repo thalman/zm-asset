@@ -143,11 +143,24 @@ zm_proto_t*
 zm_devices_lookup (zm_devices_t *self, const char* name)
 {
     assert (self);
-    assert (name);
+    if (!name)
+        return NULL;
 
     //TODO:
     //zm_devices_gc (self);
     return (zm_proto_t*) zhashx_lookup (self->devices, name);
+}
+
+void
+zm_devices_delete (zm_devices_t *self, const char* name)
+{
+    assert (self);
+    if (!name)
+        return;
+
+    //TODO:
+    //zm_devices_gc (self);
+    zhashx_delete (self->devices, name);
 }
 
 //  --------------------------------------------------------------------------
