@@ -52,7 +52,7 @@ zm_asset_new (zsock_t *pipe, void *args)
     //  TODO: Initialize properties
     self->config = NULL;
     self->consumers = NULL;
-    self->msg = NULL;
+    self->msg = zm_proto_new ();
     self->client = mlm_client_new ();
     assert (self->client);
     zpoller_add (self->poller, mlm_client_msgpipe (self->client));
@@ -98,11 +98,11 @@ zm_asset_cfg_endpoint (zm_asset_t *self)
 }
 
 static const char*
-zm_asset_cfg_name (zm_asset_t *self)
+zm_asset_cfg_address (zm_asset_t *self)
 {
     assert (self);
     if (self->config) {
-        return zconfig_resolve (self->config, "server/name", NULL);
+        return zconfig_resolve (self->config, "malamute/address", NULL);
     }
     return NULL;
 }
@@ -166,14 +166,24 @@ zm_asset_connect_to_malamute (zm_asset_t *self)
     }
 
     const char *endpoint = zm_asset_cfg_endpoint (self);
-    const char *name = zm_asset_cfg_name (self);
+    const char *address = zm_asset_cfg_address (self);
+
+    if (!endpoint) {
+        zsys_error ("malamute/endpoint is missing");
+        return -1;
+    }
+
+    if (!address) {
+        zsys_error ("malamute/address is missing");
+        return -1;
+    }
 
     if (!self->client) {
         self->client = mlm_client_new ();
         zpoller_add (self->poller, mlm_client_msgpipe (self->client));
     }
 
-    int r = mlm_client_connect (self->client, endpoint, 5000, name);
+    int r = mlm_client_connect (self->client, endpoint, 5000, address);
     if (r == -1) {
         zsys_warning ("Can't connect to malamute endpoint %", endpoint);
         return -1;
@@ -225,7 +235,7 @@ zm_asset_stop (zm_asset_t *self)
     assert (self);
 
     //  TODO: Add shutdown actions
-    zpoller_remove (self->poller, self->client);
+    zpoller_remove (self->poller, mlm_client_msgpipe (self->client));
     mlm_client_destroy (&self->client);
     zm_devices_store (self->devices);
 
@@ -242,6 +252,7 @@ zm_asset_config (zm_asset_t *self, zmsg_t *request)
     char *str_config = zmsg_popstr (request);
     if (str_config) {
         zconfig_t *foo = zconfig_str_load (str_config);
+        zstr_free (&str_config);
         if (foo) {
             zconfig_destroy (&self->config);
             self->config = foo;
@@ -302,7 +313,6 @@ static void
 zm_asset_recv_mlm_mailbox (zm_asset_t *self)
 {
     assert (self);
-    zm_proto_print (self->msg);
 
     const char *subject = mlm_client_subject (self->client);
     if (streq (subject, "INSERT")) {
@@ -320,20 +330,21 @@ zm_asset_recv_mlm_mailbox (zm_asset_t *self)
     if (streq (subject, "LOOKUP")) {
         const char *device = zm_proto_device (self->msg);
         zm_proto_t *reply = zm_devices_lookup (self->devices, device);
-        if (reply) {
-            zmsg_t *zreply = zmsg_new ();
-            zm_proto_send (reply, zreply);
-            mlm_client_sendto (
-                self->client,
-                mlm_client_sender (self->client),
-                "LOOKUP",
-                NULL,
-                5000,
-                &zreply);
-        }
+
+        zmsg_t *msg = zmsg_new ();
+        if (reply)
+            zm_proto_send (reply, msg);
         else {
-            zsys_warning ("Can't send error reply now");
+            zm_proto_encode_error (self->msg, 404, "Requested device does not exists");
+            zm_proto_send (self->msg, msg);
         }
+        mlm_client_sendto (
+            self->client,
+            mlm_client_sender (self->client),
+            "LOOKUP",
+            NULL,
+            5000,
+            &msg);
     }
 
 }
@@ -342,7 +353,6 @@ static void
 zm_asset_recv_mlm_stream (zm_asset_t *self)
 {
     assert (self);
-    zm_proto_print (self->msg);
 
     if (zm_proto_id (self->msg) != ZM_PROTO_DEVICE) {
         if (self->verbose)
@@ -411,9 +421,57 @@ zm_asset_test (bool verbose)
     //  @selftest
     //  Simple create/destroy test
     // actor test
-    zactor_t *zm_asset = zactor_new (zm_asset_actor, NULL);
 
+    static const char* endpoint = "inproc://zm-asset-test";
+    zactor_t *server = zactor_new (mlm_server, "Malamute");
+    if (verbose)
+        zstr_sendx (server, "VERBOSE", NULL);
+    zstr_sendx (server, "BIND", endpoint, NULL);
+
+    zactor_t *zm_asset = zactor_new (zm_asset_actor, NULL);
+    zstr_sendx (zm_asset, "CONFIG",
+        "malamute\n"
+        "    endpoint = inproc://zm-asset-test\n"
+        "    address = it.zmon.asset\n"
+        "    consumer\n"
+        "        DEVICES = .*\n"
+        "    producer = ASSETS\n",
+        NULL);
+    zstr_sendx (zm_asset, "START", NULL);
+
+    int r;
+    mlm_client_t *reader = mlm_client_new ();
+    assert (reader);
+    r = mlm_client_connect (reader, endpoint, 1000, "reader");
+    assert (r == 0);
+    mlm_client_set_consumer (reader, ZM_PROTO_DEVICE_STREAM, ".*");
+
+    mlm_client_t *writer = mlm_client_new ();
+    assert (writer);
+    r = mlm_client_connect (writer, endpoint, 1000, "writer");
+    assert (r == 0);
+    mlm_client_set_producer (writer, ZM_PROTO_DEVICE_STREAM);
+
+    zmsg_t *request = zm_proto_encode_device_v1 ("device1", zclock_mono (), 1024, NULL);
+    mlm_client_sendto (writer, "it.zmon.asset", "INSERT", NULL, 1000, &request);
+    // TODO: recv OK
+    request = zm_proto_encode_device_v1 ("device1", 0, 0, NULL);
+    mlm_client_sendto (writer, "it.zmon.asset", "LOOKUP", NULL, 1000, &request);
+    zmsg_t *reply = mlm_client_recv (writer);
+    zm_proto_t *device = zm_proto_new ();
+    zm_proto_recv (device, reply);
+    zmsg_destroy (&reply);
+
+    assert (zm_proto_id (device) == ZM_PROTO_DEVICE);
+    assert (streq (zm_proto_device (device), "device1"));
+
+    zm_proto_destroy (&device);
+    
+    mlm_client_destroy (&writer);
+    mlm_client_destroy (&reader);
+    zstr_sendx (zm_asset, "STOP", NULL);
     zactor_destroy (&zm_asset);
+    zactor_destroy (&server);
     //  @end
 
     printf ("OK\n");
