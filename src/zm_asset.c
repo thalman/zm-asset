@@ -47,6 +47,7 @@ zm_asset_new (zsock_t *pipe, void *args)
     self->pipe = pipe;
     self->terminated = false;
     self->poller = zpoller_new (self->pipe, NULL);
+    self->devices = zm_devices_new (NULL);
 
     //  TODO: Initialize properties
     self->config = NULL;
@@ -76,6 +77,8 @@ zm_asset_destroy (zm_asset_t **self_p)
         zm_proto_destroy (&self->msg);
         zpoller_remove (self->poller, self->client);
         mlm_client_destroy (&self->client);
+        zm_devices_store (self->devices);
+        zm_devices_destroy (&self->devices);
 
         //  Free object itself
         zpoller_destroy (&self->poller);
@@ -109,6 +112,15 @@ zm_asset_cfg_producer (zm_asset_t *self) {
     assert (self);
     if (self->config) {
         return zconfig_resolve (self->config, "malamute/producer", NULL);
+    }
+    return NULL;
+}
+
+static const char *
+zm_asset_cfg_file (zm_asset_t *self) {
+    assert (self);
+    if (self->config) {
+        return zconfig_resolve (self->config, "server/file", NULL);
     }
     return NULL;
 }
@@ -215,6 +227,7 @@ zm_asset_stop (zm_asset_t *self)
     //  TODO: Add shutdown actions
     zpoller_remove (self->poller, self->client);
     mlm_client_destroy (&self->client);
+    zm_devices_store (self->devices);
 
     return 0;
 }
@@ -232,6 +245,13 @@ zm_asset_config (zm_asset_t *self, zmsg_t *request)
         if (foo) {
             zconfig_destroy (&self->config);
             self->config = foo;
+            if (zm_asset_cfg_file (self)) {
+                if (!zm_devices_file (self->devices))
+                    zm_devices_set_file (self->devices, zm_asset_cfg_file (self));
+                zm_devices_store (self->devices);
+                zm_devices_destroy (&self->devices);
+                self->devices = zm_devices_new (zm_asset_cfg_file (self));
+            }
         }
         else {
             zsys_warning ("zm_asset: can't load config file from string");
