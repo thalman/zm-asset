@@ -72,7 +72,6 @@ zm_asset_new (zsock_t *pipe, void *args)
     self->poller = zpoller_new (self->pipe, NULL);
     self->devices = zm_devices_new (NULL);
 
-    //  TODO: Initialize properties
     self->config = NULL;
     self->consumers = NULL;
     self->msg = zm_proto_new ();
@@ -94,7 +93,6 @@ zm_asset_destroy (zm_asset_t **self_p)
     if (*self_p) {
         zm_asset_t *self = *self_p;
 
-        //  TODO: Free actor properties
         zconfig_destroy (&self->config);
         zhash_destroy (&self->consumers);
         zm_proto_destroy (&self->msg);
@@ -257,7 +255,6 @@ zm_asset_stop (zm_asset_t *self)
 {
     assert (self);
 
-    //  TODO: Add shutdown actions
     zpoller_remove (self->poller, mlm_client_msgpipe (self->client));
     mlm_client_destroy (&self->client);
     zm_devices_store (self->devices);
@@ -332,6 +329,18 @@ zm_asset_recv_api (zm_asset_t *self)
     zmsg_destroy (&request);
 }
 
+static int
+zm_asset_publish (zm_asset_t *self, zm_proto_t *device, const char *subject)
+{
+    assert (self);
+    assert (device);
+    assert (subject);
+
+    zmsg_t *msg = zmsg_new ();
+    zm_proto_send (device, msg);
+    return mlm_client_send (self->client, subject, &msg);
+}
+
 static void
 zm_asset_recv_mlm_mailbox (zm_asset_t *self)
 {
@@ -341,6 +350,7 @@ zm_asset_recv_mlm_mailbox (zm_asset_t *self)
     zmsg_t *msg = zmsg_new ();
     if (streq (subject, "INSERT")) {
         zm_devices_insert (self->devices, self->msg);
+        zm_asset_publish (self, self->msg, subject);
         zm_proto_encode_ok (self->msg);
         zm_proto_send (self->msg, msg);
     }
@@ -348,7 +358,7 @@ zm_asset_recv_mlm_mailbox (zm_asset_t *self)
     if (streq (subject, "DELETE")) {
         const char *device = zm_proto_device (self->msg);
         zm_devices_delete (self->devices, device);
-        // TODO: it should be announced on ASSET stream
+        zm_asset_publish (self, self->msg, subject);
         zm_proto_encode_ok (self->msg);
         zm_proto_send (self->msg, msg);
     }
@@ -462,8 +472,8 @@ zm_asset_test (bool verbose)
         "    endpoint = inproc://zm-asset-test\n"
         "    address = it.zmon.asset\n"
         "    consumer\n"
-        "        DEVICES = .*\n"
-        "    producer = ASSETS\n",
+        "        " ZM_PROTO_DEVICE_STREAM " = .*\n"
+        "    producer = " ZM_PROTO_DEVICE_STREAM "\n",
         NULL);
     zstr_sendx (zm_asset, "START", NULL);
 
@@ -496,6 +506,13 @@ zm_asset_test (bool verbose)
     zmsg_destroy (&zreply);
 
     assert (zm_proto_id (reply) == ZM_PROTO_DEVICE);
+    assert (streq (zm_proto_device (reply), "device1"));
+
+
+    zreply = mlm_client_recv (reader);
+    zm_proto_recv (reply, zreply);
+    zmsg_destroy (&zreply);
+    assert (streq (mlm_client_subject (reader), "INSERT"));
     assert (streq (zm_proto_device (reply), "device1"));
 
     zm_proto_destroy (&reply);
